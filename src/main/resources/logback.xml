@@ -23,6 +23,7 @@
         <appender-ref ref="console"/>
     </root>
 
+<!--    <logger level="INFO" name="org.apache.flink" />-->
     <logger level="ERROR" name="org.apache.flink" />
 
 </configuration>

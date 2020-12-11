@@ -6,6 +6,7 @@ import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.runtime.state.CheckpointListener;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.runtime.state.StateBackend;
@@ -28,7 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * end-to-end exactly once
+ * End-to-end exactly once
  *
  * Exactly Once Guarantees
  * When things go wrong in a stream processing application, it is possible to have either lost,
@@ -36,12 +37,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the cluster you run it on, any of these outcomes is possible:
  *
  * Flink makes no effort to recover from failures (at most once)
- * Nothing is lost, but you may experience duplicated results (at least once)
- * Nothing is lost or duplicated (exactly once)
- * Given that Flink recovers from faults by rewinding and replaying the source data streams,
- * when the ideal situation is described as exactly once this does not mean that every event
- * will be processed exactly once. Instead, it means that every event will affect the state
- * being managed by Flink exactly once.
+ * - Nothing is lost, but you may experience duplicated results (at least once)
+ * - Nothing is lost or duplicated (exactly once)
+ * - Given that Flink recovers from faults by rewinding and replaying the source data streams,
+ *   when the ideal situation is described as exactly once this does not mean that every event
+ *   will be processed exactly once. Instead, it means that every event will affect the state
+ *   being managed by Flink exactly once.
  *
  * Barrier alignment is only needed for providing exactly once guarantees. If you don’t need
  * this, you can gain some performance by configuring Flink to use CheckpointingMode.AT_LEAST_ONCE,
@@ -52,13 +53,22 @@ import java.util.concurrent.atomic.AtomicInteger;
  * exactly once, the following must be true:
  * - your sources must be replayable, and
  * - your sinks must be transactional (or idempotent)
- *
- *
- * Method : transaction is satiated to checkpointing, only checkpointing done, if will submit
+ * Transaction is satiated to checkpointing, only checkpointing done, if will submit
  * the transaction of sink operation.
  *
  *
  * @see TwoPhaseCommitSinkFunction
+ *
+ * Notes:
+ * - transaction support: down stream system (sink) will have to support transaction, or able to imitate one, like,
+ *   perCommitted data could not be seen until transaction commited。
+ * - transaction timeout: before snapshot completed，transaction should not timeout, or will not be able to commit causing data loss
+ * - transaction must wait for jobmanager's notifying for checkpointing globally completed, {@link CheckpointListener#notifyCheckpointComplete(long)}
+ * - on recovering, should bring back the pending(uncommitted) transactions, and try commit them or abort them again,
+ *   the strategy may depend on the crash time:
+ *   if it is between perCommit, and only flushed part of the cached data，then may abort transaction, and try deleting the flushed data;
+ *   if it is after flush, and the state's snapshot also been completed, but commit transaction fail, then may rebuild it and commit again。
+ * - commit transaction must be idempotent, because on recovering, pendingtransactions will be commited again
  *
  */
 public class ExactlyOnceTwoPhaseCommitDemo {
@@ -115,10 +125,28 @@ public class ExactlyOnceTwoPhaseCommitDemo {
     }
 
 
+    /**
+     * A fake kafka producer
+     */
     public static class MessageProducer {
+        /**
+         * offset while transaction not commit
+         */
         public static AtomicInteger unCommitOffset = new AtomicInteger(0);
+
+        /**
+         * offset after transaction committed
+         */
         public static AtomicInteger commitOffset = new AtomicInteger(0);
+
+        /**
+         * store all the data
+         */
         public static List<Tuple2<Integer, Integer>> datum = new CopyOnWriteArrayList<>();
+
+        /**
+         * data cache in one transaction
+         */
         public List<Tuple2<Integer, Integer>> dataInTxn = new CopyOnWriteArrayList<>();
 
 
@@ -135,6 +163,7 @@ public class ExactlyOnceTwoPhaseCommitDemo {
         public void abortTransaction() {
             logger.info("[PDC@@] abortTxn : commitOffset : {}, unCommitOffset: {}, dataInTxn: {}, datum: {}, pid: {}", commitOffset, unCommitOffset, dataInTxn, datum, this);
             unCommitOffset.set(commitOffset.get());
+            datum.removeAll(dataInTxn);
         }
 
         public void flush() {
@@ -159,8 +188,6 @@ public class ExactlyOnceTwoPhaseCommitDemo {
 
     /**
      * Context could be null:
-     * @see TwoPhaseCommitSinkFunction#initializeUserContext
-     * @see TwoPhaseCommitSinkFunction#userContext
      */
     public static class MyTransactionContext {
         public Set<String> transactionalIds = new HashSet<>();
@@ -182,7 +209,7 @@ public class ExactlyOnceTwoPhaseCommitDemo {
 
             produceCount.incrementAndGet();
             if (produceCount.get() == 10) {
-                logger.info("------------- crush ---------------");
+                logger.info("------------- crash ---------------");
                 throw new RuntimeException();
             }
         }
@@ -237,6 +264,12 @@ public class ExactlyOnceTwoPhaseCommitDemo {
             super.recoverAndCommit(transaction);
         }
 
+
+        @Override
+        protected void recoverAndAbort(MyTransactionState transaction) {
+            super.recoverAndAbort(transaction);
+        }
+
         @Override
         protected void abort(MyTransactionState transaction) {
             logger.info("[SNK--] abort, tid : {}", transaction.transactionalId);
@@ -251,13 +284,13 @@ public class ExactlyOnceTwoPhaseCommitDemo {
         StateBackend stateBackend = new FsStateBackend("file:///D:/tmp/checkpoints");
         env.setStateBackend(stateBackend);
 
-        DataStreamSource<Integer> personStream = env.addSource(new IntEmiter());
+        DataStreamSource<Integer> source = env.addSource(new IntEmiter());
 
         TypeSerializer<MyTransactionState> stateTypeSerializer = TypeInformation.of(new TypeHint<MyTransactionState>() {}).createSerializer(env.getConfig());
         TypeSerializer<MyTransactionContext> contextTypeSerializer = TypeInformation.of(new TypeHint<MyTransactionContext>() {}).createSerializer(env.getConfig());
 
 
-        personStream.addSink(new MyTwoPhaseCommitSinkFunction(stateTypeSerializer, contextTypeSerializer)).setParallelism(1);
+        source.addSink(new MyTwoPhaseCommitSinkFunction(stateTypeSerializer, contextTypeSerializer)).setParallelism(1);
 
         env.execute();
     }

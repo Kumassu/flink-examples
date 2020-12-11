@@ -24,7 +24,7 @@ public class ProcessFunctionDemo {
         DataStreamSource<Person> personStream = env.addSource(new PersonEmiter());
 
         SingleOutputStreamOperator<String> processedStream = personStream
-                .keyBy(person -> person.gender.name())
+                .keyBy(person -> person.gender)
                 .process(new KeyedProcessFunction<String, Person, String>() {
 
                     private ValueState<Integer> minAge;

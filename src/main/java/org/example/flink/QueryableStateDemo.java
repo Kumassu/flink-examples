@@ -95,7 +95,7 @@ public class QueryableStateDemo {
         DataStreamSource<Person> personStream = env.addSource(new PersonEmiter());
 
 
-        personStream.keyBy(person -> person.gender.name())
+        personStream.keyBy(person -> person.gender)
                 .map(new RichMapFunction<Person, Person>() {
 
                     private transient ValueState<Integer> count;

@@ -25,10 +25,10 @@ public class AggregateWindowDemo {
 
 
         // key by gender, calculate average age within a 10s window
-        SingleOutputStreamOperator<Tuple2<Gender, Double>> aggregatedStream = personStream
-                .keyBy(person -> person.gender.name())
+        SingleOutputStreamOperator<Tuple2<String, Double>> aggregatedStream = personStream
+                .keyBy(person -> person.gender)
                 .timeWindow(Time.seconds(10))
-                .aggregate(new AggregateFunction<Person, List<Person>, Tuple2<Gender, Double>>() {
+                .aggregate(new AggregateFunction<Person, List<Person>, Tuple2<String, Double>>() {
 
                     public List<Person> createAccumulator() {
                         return new ArrayList<>();
@@ -41,7 +41,7 @@ public class AggregateWindowDemo {
                     }
 
                     @Override
-                    public Tuple2<Gender, Double> getResult(List<Person> people) {
+                    public Tuple2<String, Double> getResult(List<Person> people) {
                         return new Tuple2<>(people.get(0).gender, people.stream().mapToInt(person -> person.age).summaryStatistics().getAverage());
                     }
 

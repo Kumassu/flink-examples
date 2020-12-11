@@ -85,6 +85,7 @@ public class CheckpointRecoverDemo {
 
                 // crush every time when emit 10 elements
                 if (loop == 10) {
+                    logger.info("------------- crash ---------------");
                     throw new RuntimeException("interrupt");
                 }
                 TimeUnit.MILLISECONDS.sleep(interval);

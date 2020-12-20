@@ -3,12 +3,12 @@ package org.example.flink.model;
 public class Person {
     public String name;
     public int age;
-    public Gender gender;
+    public String gender;
 
     public Person() {
     }
 
-    public Person(String id, int age, Gender gender) {
+    public Person(String id, int age, String gender) {
         this.name = id;
         this.age = age;
         this.gender = gender;

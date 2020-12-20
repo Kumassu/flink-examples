@@ -19,9 +19,7 @@ public class PersonEmiter implements SourceFunction<Person> {
     public void run(SourceContext<Person> ctx) throws Exception {
         while (!cancel) {
             synchronized (ctx.getCheckpointLock()) {
-                ctx.collect(new Person(UUID.randomUUID().toString(),
-                        new Random().nextInt(100) + 1,
-                        Gender.values()[new Random().nextInt(Gender.values().length)]));
+                ctx.collect(new Person(UUID.randomUUID().toString(), new Random().nextInt(100) + 1, Gender.random()));
             }
             ConcurrentUtils.sleep(TimeUnit.SECONDS, 1);
         }

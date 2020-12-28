@@ -1,32 +1,29 @@
 package org.example.flink;
 
-import org.apache.flink.api.common.typeinfo.TypeHint;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.ExecutionEnvironment;
-import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.table.api.*;
-import org.apache.flink.table.api.bridge.java.BatchTableEnvironment;
-import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.Table;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.java.BatchTableEnvironment;
+import org.apache.flink.table.api.java.StreamTableEnvironment;
 import org.apache.flink.table.descriptors.Csv;
 import org.apache.flink.table.descriptors.FileSystem;
 import org.apache.flink.table.descriptors.Schema;
 import org.example.flink.function.PersonEmiter;
-import org.example.flink.model.Gender;
 import org.example.flink.model.Person;
 
-import static org.apache.flink.table.api.Expressions.$;
-
-
 public class TableAPI {
-
 
 
     public static void createEnv() {
         ExecutionEnvironment batchExecEnv = ExecutionEnvironment.getExecutionEnvironment();
         StreamExecutionEnvironment streamExecEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+
+
 
         // old planner for batch
         BatchTableEnvironment batchTableEnvironment = BatchTableEnvironment.create(batchExecEnv);
@@ -72,8 +69,6 @@ public class TableAPI {
 
 
         StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env, blinkStreamSettings);
-
-        TableResult tableResult = tableEnv.executeSql("CREATE TABLE Person (`name` STRING, age INT, gender STRING)");
     }
 
 
@@ -81,36 +76,41 @@ public class TableAPI {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
 
-        tableEnv.executeSql("CREATE TABLE PERSON_SRC " +
-                "(" +
-                "`name` STRING, `age` INT, `gender` STRING" +
-                ") " +
-                "with (" +
-                "'connector' = 'filesystem'," +
-                "'path' = 'file:///D:/tmp/person_src.csv'," +
-                "'format' = 'csv'" +
-                ")");
+        Schema schema = new Schema()
+                .field("name", DataTypes.STRING())
+                .field("age", DataTypes.INT())
+                .field("gender", DataTypes.STRING());
 
-        tableEnv.executeSql("CREATE TABLE PERSON_SINK " +
-                "(" +
-                "`name` STRING, `age` INT, `gender` STRING" +
-                ") " +
-                "with (" +
-                "'connector' = 'filesystem'," +
-                "'path' = 'file:///D:/tmp/person_sink.csv'," +
-                "'format' = 'csv'" +
-                ")");
+        Csv csv = new Csv().fieldDelimiter(',');
 
-        tableEnv.executeSql("CREATE TABLE PERSON_GROUP_BY_GENDER (`gender` STRING, `cnt` BIGINT)");
+        tableEnv.connect(new FileSystem().path("D:/tmp/person_src.csv"))
+                .withSchema(schema)
+                .withFormat(csv)
+                .createTemporaryTable("person_src");
 
+        tableEnv.connect(new FileSystem().path("D:/tmp/person_sink.csv"))
+                .withSchema(schema)
+                .withFormat(csv)
+                .inAppendMode()
+                .createTemporaryTable("person_sink");
 
+        tableEnv.connect(new FileSystem().path("D:/tmp/person_group_by_gender.csv"))
+                .withSchema(new Schema().field("gender", DataTypes.STRING()).field("cnt", DataTypes.BIGINT()))
+                .withFormat(csv)
+                .inAppendMode()
+                // @see org.apache.flink.table.sinks.CsvTableSink
+                // do not support upsert or retract mode
+                // so can not insert aggregated table to svc file
+//                .inUpsertMode()
+//                .inRetractMode()
+                .createTemporaryTable("person_group_by_gender");
 
         // Note: you can't convert a aggregated table to a appendStream, user retractStream to allow retract record
-        Table groupByGender = tableEnv.from("PERSON_SRC").groupBy($("gender")).select($("gender"), $("gender").count().as("cnt"));
+        Table groupByGender = tableEnv.from("person_src").groupBy("gender").select("gender, gender.count as cnt");
 
 
         // print for test
-//        tableEnv.toAppendStream(tableEnv.from("PERSON_SRC"), Person.class).print();
+//        tableEnv.toAppendStream(tableEnv.from("person_src"), Person.class).print();
 //        tableEnv.toRetractStream(groupByGender, TypeInformation.of(new TypeHint<Tuple2<String, Long>>() {})).print();
         // the print results :
         // A true {@link Boolean} flag indicates an add message, a false flag indicates a retract message.
@@ -128,9 +128,14 @@ public class TableAPI {
 
 
         // sink to file
-        tableEnv.from("PERSON_SRC").executeInsert("PERSON_SINK");
+        tableEnv.from("person_src").insertInto("person_sink");
 
+        // will fail
+//        groupByGender.insertInto("person_group_by_gender");
+
+//        tableEnv.execute("table api");
         env.execute();
+
     }
 
 
@@ -154,8 +159,8 @@ public class TableAPI {
         Table personTable = tableEnv.fromDataStream(person);
         tableEnv.createTemporaryView("person", personTable);
 
-        Table maleTable = personTable.select($("name"), $("age"), $("gender")).where($("gender").isEqual(Gender.MALE));
-        Table femaleTable = personTable.filter($("gender").isEqual(Gender.FEMALE));
+        Table maleTable = personTable.select("name,age,gender").where("gender = 'MALE'");
+        Table femaleTable = personTable.filter("gender = 'MALE'");
         tableEnv.createTemporaryView("male", maleTable);
         tableEnv.createTemporaryView("female", femaleTable);
 
@@ -167,5 +172,4 @@ public class TableAPI {
 
         env.execute();
     }
-
 }

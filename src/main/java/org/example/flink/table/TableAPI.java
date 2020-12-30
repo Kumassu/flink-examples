@@ -1,4 +1,4 @@
-package org.example.flink;
+package org.example.flink.table;
 
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
